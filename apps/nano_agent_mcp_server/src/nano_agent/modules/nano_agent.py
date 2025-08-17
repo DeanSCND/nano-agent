@@ -75,15 +75,71 @@ class RichLoggingHooks(RunHooksBase):
         self.token_tracker = token_tracker
     
     async def on_agent_start(self, context, agent):
-        """Called when the agent starts."""
-        console.print(Panel(
-            Text(f"Agent: {agent.name}", style="bold cyan"),
-            title="🚀 Agent Started",
-            border_style="blue"
-        ))
-        
+        """Called when the agent starts.
+
+        Displays rich contextual information including:
+        • Agent name
+        • Model & provider (when available)
+        • Start timestamp
+        Also records a start time so later hooks can compute duration.
+        """
+        # ------------------------------------------------------------------ #
+        # Resolve model / provider information with graceful fall-backs
+        # ------------------------------------------------------------------ #
+        model_name: str | None = None
+        provider_name: str | None = None
+
+        # 1) Try trace metadata (set in RunConfig by nano_agent.py)
+        try:
+            trace_meta = getattr(context, "trace_metadata", {}) or {}
+            model_name = trace_meta.get("model")
+            provider_name = trace_meta.get("provider")
+        except Exception:
+            pass
+
+        # 2) Fallback to attributes on the agent instance
+        if not model_name:
+            # Agent may expose .model or .model_name
+            if hasattr(agent, "model_name"):
+                model_name = getattr(agent, "model_name")
+            elif hasattr(agent, "model"):
+                # OpenAIChatCompletionsModel, etc.
+                model_attr = getattr(agent, "model")
+                model_name = getattr(model_attr, "model", None) if model_attr else None
+        if not provider_name:
+            provider_name = trace_meta.get("provider") if "provider" in (trace_meta or {}) else "unknown"
+
+        # ------------------------------------------------------------------ #
+        # Render a rich panel with a table-like layout
+        # ------------------------------------------------------------------ #
+        from rich.table import Table
+        from datetime import datetime
+
+        start_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.agent_start_time = time.time()  # for later duration calculations
+
+        info_table = Table.grid(padding=(0, 1))
+        info_table.add_column(justify="right", style="bold")
+        info_table.add_column()
+
+        info_table.add_row("Agent", f"[cyan]{agent.name}[/cyan]")
+        info_table.add_row("Model", f"[magenta]{model_name or 'unknown'}[/magenta]")
+        info_table.add_row("Provider", f"[green]{provider_name or 'unknown'}[/green]")
+        info_table.add_row("Start", f"[yellow]{start_ts}[/yellow]")
+
+        console.print(
+            Panel(
+                info_table,
+                title="🚀 Agent Started",
+                border_style="blue",
+                expand=False,
+            )
+        )
+
+        # ------------------------------------------------------------------ #
         # Track initial token usage if available
-        if self.token_tracker and hasattr(context, 'usage'):
+        # ------------------------------------------------------------------ #
+        if self.token_tracker and hasattr(context, "usage"):
             self.token_tracker.update(context.usage)
             logger.debug(f"Initial tokens: {context.usage.total_tokens}")
     
@@ -183,6 +239,16 @@ class RichLoggingHooks(RunHooksBase):
         # Calculate execution time
         exec_time = time.time() - getattr(self, 'current_tool_start_time', time.time())
         
+        # Update running token and cost totals if token_tracker is available
+        total_tokens = None
+        total_cost = None
+        if self.token_tracker and hasattr(context, "usage"):
+            # Update tracker with latest usage from this tool invocation
+            self.token_tracker.update(context.usage)
+            total_tokens = self.token_tracker.total_usage.total_tokens
+            # calculate_cost returns (input_cost, output_cost, cached_savings, total_cost)
+            total_cost = self.token_tracker.calculate_cost()[3]
+        
         # Try to get the captured arguments from our tools module
         tool_args = {}
         try:
@@ -258,33 +324,73 @@ class RichLoggingHooks(RunHooksBase):
         # Create panel with tool call number and execution time (no per-tool tokens)
         console.print(Panel(
             Syntax(call_display, "python", theme="monokai", line_numbers=False) if tool_args else Text(call_display, style=result_color),
-            title=f"✅ Tool Call #{tool_number} ({exec_time:.2f}s)",
+            title=f"✅ Tool Call #{tool_number} ({exec_time:.2f}s) | Tokens: {format_token_count(total_tokens) if total_tokens is not None else 'N/A'} | Cost: {format_cost(total_cost) if total_cost is not None else 'N/A'}",
             border_style="green" if result_color == "green" else "red"
         ))
     
     async def on_agent_end(self, context, agent, output):
-        """Called when the agent produces final output."""
-        # Track final token usage
-        if self.token_tracker and hasattr(context, 'usage'):
+        """Called when the agent produces final output and renders a rich summary."""
+        from rich.table import Table
+        import time
+
+        # ------------------------------------------------------------------ #
+        # 1. Update final token usage (if tracker/context available)
+        # ------------------------------------------------------------------ #
+        report = None
+        if self.token_tracker and hasattr(context, "usage"):
             self.token_tracker.update(context.usage)
-            
-            # Show usage summary
             report = self.token_tracker.generate_report()
-            usage_text = (
-                f"Tokens: {format_token_count(report.total_tokens)} | "
-                f"Cost: {format_cost(report.total_cost)}"
+
+        # ------------------------------------------------------------------ #
+        # 2. Compute total execution duration
+        # ------------------------------------------------------------------ #
+        duration_seconds = None
+        if hasattr(self, "agent_start_time"):
+            duration_seconds = time.time() - self.agent_start_time
+
+        # ------------------------------------------------------------------ #
+        # 3. Build a rich table with all key metrics
+        # ------------------------------------------------------------------ #
+        table = Table.grid(padding=(0, 2))
+        table.add_column(justify="right", style="bold")
+        table.add_column()
+
+        # Basic metadata
+        model_name = getattr(self.token_tracker, "model", "unknown") if self.token_tracker else "unknown"
+        provider_name = getattr(self.token_tracker, "provider", "unknown") if self.token_tracker else "unknown"
+        table.add_row("Model", f"[magenta]{model_name}[/magenta]")
+        table.add_row("Provider", f"[green]{provider_name}[/green]")
+
+        # Duration & tool count
+        if duration_seconds is not None:
+            table.add_row("Duration", f"[yellow]{duration_seconds:.2f}s[/yellow]")
+        table.add_row("Tools Executed", f"[cyan]{self.tool_call_count}[/cyan]")
+
+        # Token & cost breakdown (only if we have a report)
+        if report:
+            # Token counts
+            table.add_row("Input Tokens", format_token_count(report.total_input_tokens))
+            table.add_row("Output Tokens", format_token_count(report.total_output_tokens))
+            table.add_row("Cached Tokens", format_token_count(report.cached_input_tokens))
+            table.add_row("Total Tokens", f"[bold]{format_token_count(report.total_tokens)}[/bold]")
+
+            # Costs
+            table.add_row("Input Cost", format_cost(report.input_cost))
+            table.add_row("Output Cost", format_cost(report.output_cost))
+            if report.cached_savings > 0:
+                table.add_row("Cached Savings", f"-{format_cost(report.cached_savings)}")
+            table.add_row("Total Cost", f"[bold]{format_cost(report.total_cost)}[/bold]")
+
+        # ------------------------------------------------------------------ #
+        # 4. Render summary panel
+        # ------------------------------------------------------------------ #
+        console.print(
+            Panel(
+                table,
+                title="🎯 Agent Summary",
+                border_style="green",
             )
-            console.print(Panel(
-                Text(f"Agent completed successfully\n{usage_text}", style="bold green"),
-                title="🎯 Agent Finished",
-                border_style="green"
-            ))
-        else:
-            console.print(Panel(
-                Text("Agent completed successfully", style="bold green"),
-                title="🎯 Agent Finished",
-                border_style="green"
-            ))
+        )
 
 
 async def _execute_nano_agent_async(request: PromptNanoAgentRequest, enable_rich_logging: bool = True) -> PromptNanoAgentResponse:
