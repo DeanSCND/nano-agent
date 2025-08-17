@@ -23,9 +23,15 @@ class PromptNanoAgentRequest(BaseModel):
         default="gpt-5-mini",
         description="LLM model to use for the agent"
     )
-    provider: Literal["openai", "anthropic", "ollama"] = Field(
+    provider: Literal["openai", "anthropic", "ollama", "azure"] = Field(
         default="openai",
         description="LLM provider for the agent"
+    )
+    max_turns: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=100,
+        description="Maximum agent turns (default: 20). Set higher for complex tasks."
     )
 
 
@@ -101,7 +107,7 @@ class CreateFileResponse(BaseModel):
 class AgentConfig(BaseModel):
     """Configuration for the nano agent."""
     model: str = Field(description="LLM model identifier")
-    provider: Literal["openai", "anthropic", "ollama"] = Field(description="LLM provider")
+    provider: Literal["openai", "anthropic", "ollama", "azure"] = Field(description="LLM provider")
     temperature: float = Field(
         default=0.7,
         ge=0.0,

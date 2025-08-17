@@ -354,11 +354,14 @@ async def _execute_nano_agent_async(request: PromptNanoAgentRequest, enable_rich
         token_tracker = TokenTracker(model=request.model, provider=request.provider) if enable_rich_logging else None
         hooks = RichLoggingHooks(token_tracker=token_tracker) if enable_rich_logging else None
         
+        # Determine effective max turns
+        effective_max_turns = request.max_turns if request.max_turns is not None else MAX_AGENT_TURNS
+        
         # Run the agent asynchronously
         result = await Runner.run(
             agent,
             request.agentic_prompt,
-            max_turns=MAX_AGENT_TURNS,
+            max_turns=effective_max_turns,
             run_config=RunConfig(
                 workflow_name="nano_agent_task",
                 trace_metadata={
@@ -484,11 +487,14 @@ def _execute_nano_agent(request: PromptNanoAgentRequest, enable_rich_logging: bo
         token_tracker = TokenTracker(model=request.model, provider=request.provider) if enable_rich_logging else None
         hooks = RichLoggingHooks(token_tracker=token_tracker) if enable_rich_logging else None
         
+        # Determine effective max turns
+        effective_max_turns = request.max_turns if request.max_turns is not None else MAX_AGENT_TURNS
+        
         # Run the agent synchronously (we'll handle async in the wrapper)
         result = Runner.run_sync(
             agent,
             request.agentic_prompt,
-            max_turns=MAX_AGENT_TURNS,
+            max_turns=effective_max_turns,
             run_config=RunConfig(
                 workflow_name="nano_agent_task",
                 trace_metadata={
@@ -562,6 +568,7 @@ async def prompt_nano_agent(
     agentic_prompt: str,
     model: str = DEFAULT_MODEL,
     provider: str = DEFAULT_PROVIDER,
+    max_turns: Optional[int] = None,
     ctx: Any = None  # Context will be injected by FastMCP when registered
 ) -> Dict[str, Any]:
     """
@@ -592,6 +599,9 @@ async def prompt_nano_agent(
                  - "openai" (default): OpenAI's GPT models
                  - "anthropic": Anthropic's Claude models via LiteLLM
                  - "ollama": Local models via Ollama
+        
+        max_turns: Maximum number of agent turns (default: 20). Set higher for complex tasks.
+                  Range: 1-100. Code Managers should set this based on task complexity.
         
         ctx: MCP context (automatically injected)
     
@@ -624,7 +634,8 @@ async def prompt_nano_agent(
         request = PromptNanoAgentRequest(
             agentic_prompt=agentic_prompt,
             model=model,
-            provider=provider
+            provider=provider,
+            max_turns=max_turns
         )
         
         if ctx:

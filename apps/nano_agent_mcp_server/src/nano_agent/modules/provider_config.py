@@ -128,6 +128,33 @@ class ProviderConfig:
                 model_settings=model_settings
             )
         
+        elif provider == "azure":
+            # Use OpenAI SDK with Azure OpenAI endpoint
+            logger.debug(f"Creating Azure OpenAI agent with model: {model}")
+            azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+            if not azure_endpoint:
+                raise ValueError("AZURE_OPENAI_ENDPOINT environment variable is required for Azure provider")
+            
+            # Azure OpenAI uses a different URL structure
+            # Format: https://YOUR_RESOURCE_NAME.openai.azure.com/
+            from openai import AsyncAzureOpenAI
+            azure_client = AsyncAzureOpenAI(
+                azure_endpoint=azure_endpoint,
+                api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+                api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-08-01-preview"),
+                azure_deployment=model  # The deployment name in Azure
+            )
+            return Agent(
+                name=name,
+                instructions=instructions,
+                tools=tools,
+                model=OpenAIChatCompletionsModel(
+                    model=model,  # This will be the deployment name
+                    openai_client=azure_client
+                ),
+                model_settings=model_settings
+            )
+        
         else:
             raise ValueError(f"Unsupported provider: {provider}")
     
@@ -172,6 +199,13 @@ class ProviderConfig:
         required_key = provider_requirements.get(provider)
         if required_key and not os.getenv(required_key):
             return False, f"Missing environment variable: {required_key}"
+        
+        # Check Azure-specific requirements
+        if provider == "azure":
+            if not os.getenv("AZURE_OPENAI_ENDPOINT"):
+                return False, "Missing environment variable: AZURE_OPENAI_ENDPOINT"
+            # Model parameter for Azure is actually the deployment name
+            logger.debug(f"Azure provider validated with deployment: {model}")
         
         # Check Ollama availability
         if provider == "ollama":

@@ -8,6 +8,7 @@ with various commands and interactive modes.
 
 import asyncio
 import typer
+from typing import Optional
 from rich.console import Console
 from rich.panel import Panel
 from rich.syntax import Syntax
@@ -92,6 +93,7 @@ def run(
     prompt: str,
     model: str = typer.Option(DEFAULT_MODEL, help="Model to use (default: gpt-5-mini)"),
     provider: str = typer.Option(DEFAULT_PROVIDER, help="Provider to use"),
+    max_turns: Optional[int] = typer.Option(None, help="Maximum agent turns (default: 20, max: 100)"),
     verbose: bool = typer.Option(False, help="Show detailed output")
 ):
     """Run the nano agent with a prompt."""
@@ -104,7 +106,8 @@ def run(
     request = PromptNanoAgentRequest(
         agentic_prompt=prompt,
         model=model,
-        provider=provider
+        provider=provider,
+        max_turns=max_turns
     )
     
     # Execute agent without progress spinner (rich logging will show progress)
