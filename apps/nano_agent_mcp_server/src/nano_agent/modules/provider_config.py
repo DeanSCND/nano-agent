@@ -5,12 +5,19 @@ This module provides a thin abstraction layer for creating agents
 with different model providers (OpenAI, Anthropic, Ollama).
 """
 
+# Apply OpenAI compatibility patches BEFORE any OpenAI imports
+from . import openai_compat
+
 from typing import Optional, Union
 import os
 import logging
 from openai import AsyncOpenAI
 from agents import Agent, OpenAIChatCompletionsModel, ModelSettings, set_tracing_disabled
 import requests
+
+# LiteLLM + tool translation
+from .litellm_adapter import create_litellm_adapter, LITELLM_AVAILABLE
+from .tool_translator import convert_tools_for_provider
 
 # Apply typing fixes for Python 3.12+ compatibility
 from . import typing_fix
@@ -93,8 +100,77 @@ class ProviderConfig:
             )
         
         elif provider == "anthropic":
-            # Use OpenAI SDK with Anthropic's OpenAI-compatible endpoint
-            logger.debug(f"Creating Anthropic agent with model: {model}")
+            """
+            Anthropic integration now uses LiteLLM for proper Claude support.
+            We attempt to build an OpenAI-compatible wrapper around a LiteLLM
+            adapter so the rest of the Agent SDK can interact with it
+            transparently.  If LiteLLM is unavailable we gracefully fall back
+            to the previous (often-broken) AsyncOpenAI endpoint strategy.
+            """
+            logger.debug(f"Creating Anthropic agent with model: {model} via LiteLLM")
+
+            if LITELLM_AVAILABLE:
+                try:
+                    # ------------------------------------------------------------------ #
+                    # 1. Instantiate LiteLLM adapter
+                    # ------------------------------------------------------------------ #
+                    adapter = create_litellm_adapter(
+                        provider="anthropic",
+                        model=model,
+                        api_key=os.getenv("ANTHROPIC_API_KEY")
+                    )
+
+                    # ------------------------------------------------------------------ #
+                    # 2. Convert tools to Anthropic format
+                    # ------------------------------------------------------------------ #
+                    translated_tools = convert_tools_for_provider(tools, "anthropic")
+
+                    # ------------------------------------------------------------------ #
+                    # 3. Build a minimal OpenAI-compatible wrapper
+                    # ------------------------------------------------------------------ #
+                    class _LiteLLMChatCompletions:
+                        """Expose create / acreate the way OpenAI SDK expects."""
+                        def __init__(self, _adapter):
+                            self._adapter = _adapter
+
+                        def create(self, model: str, messages: list, **kwargs):
+                            # LiteLLM handles the model string itself; we pass messages onwards
+                            return self._adapter.completion(messages=messages, **kwargs)
+
+                        async def acreate(self, model: str, messages: list, **kwargs):
+                            return await self._adapter.acompletion(messages=messages, **kwargs)
+
+                    class _LiteLLMClient:
+                        """Mimic the minimal subset of the OpenAI client used by Agent SDK."""
+                        def __init__(self, _adapter):
+                            self.chat = type("obj", (), {})()  # empty simple namespace object
+                            self.chat.completions = _LiteLLMChatCompletions(_adapter)
+
+                    lite_client = _LiteLLMClient(adapter)
+
+                    # ------------------------------------------------------------------ #
+                    # 4. Return fully configured Agent
+                    # ------------------------------------------------------------------ #
+                    return Agent(
+                        name=name,
+                        instructions=instructions,
+                        tools=translated_tools,
+                        model=OpenAIChatCompletionsModel(
+                            model=model,
+                            openai_client=lite_client  # our wrapper
+                        ),
+                        model_settings=model_settings
+                    )
+
+                except Exception as e:
+                    logger.warning(
+                        "LiteLLM integration for Anthropic failed (%s). "
+                        "Falling back to AsyncOpenAI path.", e, exc_info=True
+                    )
+                    # Intentional fall-through to fallback
+
+            # ------------------------- Fallback Path ------------------------------ #
+            logger.debug("Falling back to AsyncOpenAI Anthropic endpoint (may be limited).")
             anthropic_client = AsyncOpenAI(
                 base_url="https://api.anthropic.com/v1/",
                 api_key=os.getenv("ANTHROPIC_API_KEY")

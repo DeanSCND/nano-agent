@@ -5,6 +5,9 @@ This module implements the nano agent using OpenAI's Agent SDK for
 autonomous task execution with file system tools.
 """
 
+# Apply OpenAI compatibility patches BEFORE any OpenAI imports
+from . import openai_compat
+
 import logging
 import os
 from typing import Dict, Any, List, Optional

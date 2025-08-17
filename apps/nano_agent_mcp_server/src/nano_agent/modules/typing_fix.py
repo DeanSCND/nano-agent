@@ -13,6 +13,75 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+def apply_missing_modules():
+    """Create stub modules for missing OpenAI types that openai-agents expects."""
+    
+    import types
+    
+    # Ensure responses module exists
+    if 'openai.types.responses' not in sys.modules:
+        responses_module = types.ModuleType('openai.types.responses')
+        sys.modules['openai.types.responses'] = responses_module
+        
+        # Add to parent module
+        import openai.types
+        openai.types.responses = responses_module
+    
+    # Create stub for response_prompt_param if it doesn't exist
+    try:
+        from openai.types.responses import response_prompt_param
+    except (ImportError, ModuleNotFoundError):
+        # Create response_prompt_param module with stub
+        response_prompt_module = types.ModuleType('openai.types.responses.response_prompt_param')
+        
+        # Add a stub ResponsePromptParam class
+        class ResponsePromptParam:
+            """Stub for missing ResponsePromptParam type."""
+            pass
+        
+        response_prompt_module.ResponsePromptParam = ResponsePromptParam
+        sys.modules['openai.types.responses.response_prompt_param'] = response_prompt_module
+        
+        # Link to parent
+        sys.modules['openai.types.responses'].response_prompt_param = response_prompt_module
+        
+        logger.debug("Created stub for missing openai.types.responses.response_prompt_param")
+    
+    # Fix the response_input_item_param import issue
+    try:
+        from openai.types.responses.response_input_item_param import LocalShellCallOutput
+    except (ImportError, AttributeError):
+        # Check if the module exists
+        if 'openai.types.responses.response_input_item_param' in sys.modules:
+            # Module exists but LocalShellCallOutput is missing
+            module = sys.modules['openai.types.responses.response_input_item_param']
+            
+            # Create stub class
+            class LocalShellCallOutput:
+                """Stub for missing LocalShellCallOutput type."""
+                pass
+            
+            # Add to module
+            module.LocalShellCallOutput = LocalShellCallOutput
+            logger.debug("Added stub LocalShellCallOutput to existing module")
+        else:
+            # Create the entire module
+            input_item_module = types.ModuleType('openai.types.responses.response_input_item_param')
+            
+            # Add stub classes
+            class LocalShellCallOutput:
+                """Stub for missing LocalShellCallOutput type."""
+                pass
+            
+            input_item_module.LocalShellCallOutput = LocalShellCallOutput
+            sys.modules['openai.types.responses.response_input_item_param'] = input_item_module
+            
+            # Link to parent
+            if 'openai.types.responses' in sys.modules:
+                sys.modules['openai.types.responses'].response_input_item_param = input_item_module
+            
+            logger.debug("Created stub module for response_input_item_param")
+
 def apply_patches():
     """Replace problematic Union types with concrete types for compatibility."""
     
@@ -63,4 +132,5 @@ def apply_patches():
         logger.debug(f"Error applying OpenAI typing patches: {e}")
 
 # Auto-apply patches on import
+apply_missing_modules()
 apply_patches()
