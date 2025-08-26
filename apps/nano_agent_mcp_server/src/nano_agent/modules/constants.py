@@ -19,7 +19,7 @@ AVAILABLE_MODELS = {
         "claude-3-haiku-20240307",
     ],
     "ollama": ["gpt-oss:20b", "gpt-oss:120b"],
-    "azure": ["gpt-5", "gpt-5-mini"],  # Azure deployment names
+    "azure": ["gpt-5", "gpt-5-mini", "o3", "o3-mini", "gpt-4.1", "gpt-4o", "o1"],  # Azure deployment names
 }
 
 # Model Display Names and Descriptions
@@ -28,6 +28,10 @@ MODEL_INFO = {
     "gpt-5-mini": "GPT-5 Mini - Efficient, fast, good for most tasks",
     "gpt-5": "GPT-5 - Most powerful, best for complex reasoning",
     "gpt-4o": "GPT-4o - Previous generation, proven reliability",
+    "o3": "O3 - Advanced reasoning model",
+    "o3-mini": "O3 Mini - Fast reasoning model, optimized for speed",
+    "o1": "O1 - Deep reasoning model",
+    "gpt-4.1": "GPT-4.1 - Enhanced GPT-4 model",
     "claude-opus-4-1-20250805": "Claude Opus 4.1 - Latest Anthropic flagship",
     "claude-opus-4-20250514": "Claude Opus 4 - Powerful reasoning",
     "claude-sonnet-4-20250514": "Claude Sonnet 4 - Balanced performance",
