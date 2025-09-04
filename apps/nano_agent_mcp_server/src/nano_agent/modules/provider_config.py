@@ -36,14 +36,18 @@ class ProviderConfig:
         # Filter settings based on model capabilities
         filtered_settings = {}
         
-        # GPT-5 models have special requirements
-        if model.startswith("gpt-5"):
-            logger.debug(f"Configuring GPT-5 model {model} - using max_completion_tokens")
-            # GPT-5 uses max_completion_tokens instead of max_tokens
+        # GPT-5 and o3 models have special requirements
+        if model.startswith("gpt-5") or model.startswith("o3") or model.startswith("o1"):
+            logger.debug(f"Configuring {model} - using max_completion_tokens via extra_args")
+            # These models use max_completion_tokens instead of max_tokens
+            # Pass it through extra_args which gets unpacked as **kwargs
             if "max_tokens" in base_settings:
-                filtered_settings["max_completion_tokens"] = base_settings["max_tokens"]
-            # GPT-5 models only support temperature=1 (default)
+                filtered_settings["extra_args"] = {"max_completion_tokens": base_settings["max_tokens"]}
+            # Explicitly set max_tokens to None to prevent it from being passed
+            filtered_settings["max_tokens"] = None
+            # These models only support temperature=1 (default)
             # Don't include temperature in settings
+            filtered_settings["temperature"] = None
         else:
             # Other models support all settings
             filtered_settings = base_settings.copy()
@@ -138,10 +142,17 @@ class ProviderConfig:
             # Azure OpenAI uses a different URL structure
             # Format: https://YOUR_RESOURCE_NAME.openai.azure.com/
             from openai import AsyncAzureOpenAI
+            
+            # For o3/o1 models, use latest API version
+            api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-08-01-preview")
+            if model.startswith("o3") or model.startswith("o1"):
+                api_version = "2024-12-01-preview"  # Latest version for o3 models
+                logger.debug(f"Using API version {api_version} for {model}")
+            
             azure_client = AsyncAzureOpenAI(
                 azure_endpoint=azure_endpoint,
                 api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-                api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-08-01-preview"),
+                api_version=api_version,
                 azure_deployment=model  # The deployment name in Azure
             )
             return Agent(

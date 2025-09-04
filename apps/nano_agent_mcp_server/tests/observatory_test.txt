@@ -1,0 +1,1 @@
+Nano-agent with Observatory integration works\!

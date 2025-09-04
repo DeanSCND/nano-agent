@@ -95,3 +95,5 @@ deep_specs/
 logs/
 
 .env
+
+claude-code-project-index/

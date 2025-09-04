@@ -7,12 +7,21 @@ autonomous task execution with file system tools.
 
 import logging
 import os
-from typing import Dict, Any, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from datetime import datetime
 import time
 from pathlib import Path
 import json
 import asyncio
+
+# Observatory event reporting (optional dependency - fail gracefully)
+try:
+    import requests
+    import json as json_module
+    from typing import Optional
+    OBSERVATORY_AVAILABLE = True
+except ImportError:
+    OBSERVATORY_AVAILABLE = False
 
 # OpenAI Agent SDK imports (required)
 from agents import Agent, Runner, RunConfig, ModelSettings
@@ -59,6 +68,31 @@ from .provider_config import ProviderConfig
 # Initialize logger and rich console
 logger = logging.getLogger(__name__)
 console = Console()
+
+
+def _report_observatory_event(event_type: str, message: str, details: Dict[str, Any] = None):
+    """Report event to Observatory with graceful failure handling."""
+    if not OBSERVATORY_AVAILABLE:
+        return
+    
+    try:
+        payload = {
+            "agent": "nano-agent",
+            "type": event_type,
+            "message": message,
+            "details": details or {},
+            "timestamp": time.time()
+        }
+        
+        requests.post(
+            "http://localhost:3456/report-event",
+            headers={"Content-Type": "application/json"},
+            json=payload,
+            timeout=2
+        )
+    except Exception:
+        # Silently fail - Observatory reporting should never block execution
+        pass
 
 
 class RichLoggingHooks(RunHooksBase):
@@ -307,6 +341,21 @@ async def _execute_nano_agent_async(request: PromptNanoAgentRequest, enable_rich
         logger.info(f"Executing nano agent with Agent SDK: {request.agentic_prompt[:100]}...")
         logger.debug(f"Model: {request.model}, Provider: {request.provider}")
         
+        # Determine effective max turns for Observatory reporting
+        effective_max_turns = request.max_turns if request.max_turns is not None else MAX_AGENT_TURNS
+        
+        # Report start event to Observatory
+        _report_observatory_event(
+            "agent_start",
+            f"Starting nano-agent execution with {request.model}",
+            {
+                "model": request.model,
+                "provider": request.provider,
+                "max_turns": effective_max_turns,
+                "prompt_length": len(request.agentic_prompt)
+            }
+        )
+        
         # Validate provider and model combination
         is_valid, error_msg = ProviderConfig.validate_provider_setup(
             request.provider, 
@@ -354,9 +403,6 @@ async def _execute_nano_agent_async(request: PromptNanoAgentRequest, enable_rich
         token_tracker = TokenTracker(model=request.model, provider=request.provider) if enable_rich_logging else None
         hooks = RichLoggingHooks(token_tracker=token_tracker) if enable_rich_logging else None
         
-        # Determine effective max turns
-        effective_max_turns = request.max_turns if request.max_turns is not None else MAX_AGENT_TURNS
-        
         # Run the agent asynchronously
         result = await Runner.run(
             agent,
@@ -378,6 +424,35 @@ async def _execute_nano_agent_async(request: PromptNanoAgentRequest, enable_rich
         # Extract the final output
         final_output = result.final_output if hasattr(result, 'final_output') else str(result)
         
+        # Validate that we actually got meaningful output
+        if not final_output or (isinstance(final_output, str) and final_output.strip() == ""):
+            error_msg = "Agent completed but produced no output"
+            logger.warning(error_msg)
+            
+            # Report failure to Observatory
+            _report_observatory_event(
+                "error",
+                error_msg,
+                {
+                    "model": request.model,
+                    "provider": request.provider,
+                    "error_type": "empty_output",
+                    "execution_time": execution_time
+                }
+            )
+            
+            return PromptNanoAgentResponse(
+                success=False,
+                error=error_msg,
+                metadata={
+                    "model": request.model,
+                    "provider": request.provider,
+                    "error_type": "empty_output",
+                    "execution_time": execution_time
+                },
+                execution_time_seconds=execution_time
+            )
+        
         # Check if result has usage information
         if hasattr(result, 'usage') and token_tracker:
             token_tracker.add_usage(
@@ -398,6 +473,20 @@ async def _execute_nano_agent_async(request: PromptNanoAgentRequest, enable_rich
         
         logger.info(f"Agent completed successfully in {execution_time:.2f}s")
         
+        # Report success event to Observatory
+        _report_observatory_event(
+            "agent_success",
+            f"Nano-agent execution completed successfully with {request.model}",
+            {
+                "model": request.model,
+                "provider": request.provider,
+                "execution_time": execution_time,
+                "turns_used": metadata.get("turns"),
+                "token_usage": metadata.get("token_usage"),
+                "success": True
+            }
+        )
+        
         return PromptNanoAgentResponse(
             success=True,
             result=final_output,
@@ -410,6 +499,20 @@ async def _execute_nano_agent_async(request: PromptNanoAgentRequest, enable_rich
         full_traceback = traceback.format_exc()
         logger.error(f"Agent SDK execution failed: {str(e)}\nFull traceback:\n{full_traceback}")
         execution_time = time.time() - start_time
+        
+        # Report error event to Observatory
+        _report_observatory_event(
+            "agent_error",
+            f"Nano-agent execution failed with {request.model}",
+            {
+                "model": request.model,
+                "provider": request.provider,
+                "execution_time": execution_time,
+                "error_type": type(e).__name__,
+                "error_details": str(e),
+                "success": False
+            }
+        )
         
         return PromptNanoAgentResponse(
             success=False,
@@ -442,6 +545,21 @@ def _execute_nano_agent(request: PromptNanoAgentRequest, enable_rich_logging: bo
     try:
         logger.info(f"Executing nano agent with Agent SDK: {request.agentic_prompt[:100]}...")
         logger.debug(f"Model: {request.model}, Provider: {request.provider}")
+        
+        # Determine effective max turns for Observatory reporting
+        effective_max_turns = request.max_turns if request.max_turns is not None else MAX_AGENT_TURNS
+        
+        # Report start event to Observatory
+        _report_observatory_event(
+            "agent_start",
+            f"Starting nano-agent execution with {request.model}",
+            {
+                "model": request.model,
+                "provider": request.provider,
+                "max_turns": effective_max_turns,
+                "prompt_length": len(request.agentic_prompt)
+            }
+        )
         
         # Validate provider and model combination
         is_valid, error_msg = ProviderConfig.validate_provider_setup(
@@ -487,9 +605,6 @@ def _execute_nano_agent(request: PromptNanoAgentRequest, enable_rich_logging: bo
         token_tracker = TokenTracker(model=request.model, provider=request.provider) if enable_rich_logging else None
         hooks = RichLoggingHooks(token_tracker=token_tracker) if enable_rich_logging else None
         
-        # Determine effective max turns
-        effective_max_turns = request.max_turns if request.max_turns is not None else MAX_AGENT_TURNS
-        
         # Run the agent synchronously (we'll handle async in the wrapper)
         result = Runner.run_sync(
             agent,
@@ -510,6 +625,35 @@ def _execute_nano_agent(request: PromptNanoAgentRequest, enable_rich_logging: bo
         
         # Extract the final output
         final_output = result.final_output if hasattr(result, 'final_output') else str(result)
+        
+        # Validate that we actually got meaningful output
+        if not final_output or (isinstance(final_output, str) and final_output.strip() == ""):
+            error_msg = "Agent completed but produced no output"
+            logger.warning(error_msg)
+            
+            # Report failure to Observatory
+            _report_observatory_event(
+                "error",
+                error_msg,
+                {
+                    "model": request.model,
+                    "provider": request.provider,
+                    "error_type": "empty_output",
+                    "execution_time": execution_time
+                }
+            )
+            
+            return PromptNanoAgentResponse(
+                success=False,
+                error=error_msg,
+                metadata={
+                    "model": request.model,
+                    "provider": request.provider,
+                    "error_type": "empty_output",
+                    "execution_time": execution_time
+                },
+                execution_time_seconds=execution_time
+            )
         
         # Check if result has usage information
         if hasattr(result, 'usage') and token_tracker:
@@ -544,12 +688,41 @@ def _execute_nano_agent(request: PromptNanoAgentRequest, enable_rich_logging: bo
         )
         
         logger.info(f"Agent SDK execution completed successfully in {execution_time:.2f} seconds")
+        
+        # Report success event to Observatory
+        _report_observatory_event(
+            "agent_success",
+            f"Nano-agent execution completed successfully with {request.model}",
+            {
+                "model": request.model,
+                "provider": request.provider,
+                "execution_time": execution_time,
+                "turns_used": metadata.get("turns_used"),
+                "token_usage": metadata.get("token_usage"),
+                "success": True
+            }
+        )
+        
         return response
         
     except Exception as e:
         execution_time = time.time() - start_time
         error_msg = f"Agent SDK execution failed: {str(e)}"
         logger.error(error_msg, exc_info=True)
+        
+        # Report error event to Observatory
+        _report_observatory_event(
+            "agent_error",
+            f"Nano-agent execution failed with {request.model}",
+            {
+                "model": request.model,
+                "provider": request.provider,
+                "execution_time": execution_time,
+                "error_type": type(e).__name__,
+                "error_details": str(e),
+                "success": False
+            }
+        )
         
         return PromptNanoAgentResponse(
             success=False,
